@@ -401,7 +401,7 @@ Space rows accept these built-in tokens:
 - `git_status` — Git ahead and behind counts when nonzero.
 - `$name` — custom workspace metadata named `name`.
 
-Tokens render in their configured order. Herdr normally separates adjacent values with ` · ` and uses a single space after `state_icon`. Missing values and their separators disappear; a row disappears when none of its tokens have a value. Existing custom rows remain unchanged, so add `machine` explicitly if you want machine identity in a custom multi-machine layout. Each layout may contain at most 16 rows, with at most 16 tokens in each row.
+Tokens render in their configured order. Herdr normally separates adjacent values with ` · ` and uses a single space after `state_icon`. Missing values and their separators disappear; a row disappears when none of its tokens have a value. Priority ordering and Agent views installed through `agent.view.set` keep Agent rows flat, so add `machine` explicitly if you want machine identity in a flat custom multi-machine layout. Each layout may contain at most 16 rows, with at most 16 tokens in each row.
 
 A token entry can also be an inline style table:
 
@@ -434,7 +434,9 @@ The first matching rule wins. Its specified style fields override the occurrence
 
 Rules work with text-valued built-ins and custom `$name` tokens in Agent rows, `rows_by_agent` overrides, and Space rows. Custom tokens match their reported value: `$load` reporting `"90"` selects red and bold above, `"60"` selects yellow, and `"90%"` keeps white. Unreported tokens still disappear. `state_icon` and composite `git_status` accept fixed styles only, not rules. Unknown conditions and malformed rules are rejected when loading config; regex, fuzzy matching, and scripts are not supported.
 
-`row_gap` controls the blank terminal rows between entries, independently for the Agent and Space panels. It defaults to `0`, which packs entries together; set it to `1` to restore the previous spacing. It does not add spacing between the content lines declared in `rows`. Consecutive indented worktree children remain packed as one Space group.
+`row_gap` controls the blank terminal rows between entries, independently for the Agent and Space panels. It defaults to `0`, which packs entries together; set it to `1` to restore the previous spacing. It does not add spacing between the content lines declared in `rows`. In the Agent panel's **grouped** mode, it adds blank rows only between workspace groups, not between agents within a workspace; consecutive indented worktree children remain packed as one Space group.
+
+With `ui.agent_panel_sort = "spaces"` (shown as **grouped** in the sidebar) and no Agent view installed through `agent.view.set`, the expanded Agent panel shows a workspace → agent tree, like the Space/worktree tree. Each workspace has a plain, non-clickable, non-collapsible header and indented agent children with `├─`/`└─` branches (and `│` continuation for multiline rows). On multiple machines, the header includes the machine label; workspaces on different machines remain separate. Grouped children omit `machine` and `workspace` tokens even when explicitly configured; the header supplies those labels. With the default Agent layout, a status-only first line merges into the agent name line, but a first line containing `tab` stays separate, so those children remain multiline. Priority ordering and Agent views set through `agent.view.set` keep the flat Agent layout; the collapsed sidebar is unchanged.
 
 Override the complete Agent layout for a known agent under `rows_by_agent`:
 

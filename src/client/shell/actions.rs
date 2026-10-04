@@ -875,19 +875,13 @@ impl ClientShellState {
         };
 
         match action {
-            KeybindAction::FocusAgent(index) => {
-                let agents = super::agent_sidebar::ordered_agent_pane_ids(
+            KeybindAction::FocusAgent(_)
+            | KeybindAction::PreviousAgent
+            | KeybindAction::NextAgent => {
+                let agents = super::agent_sidebar::navigation_agent_pane_ids(
                     snapshot,
-                    self.config.agent_panel_sort,
-                );
-                Some(Method::PaneFocus(PaneTarget {
-                    pane_id: agents.get(index)?.clone(),
-                }))
-            }
-            KeybindAction::PreviousAgent | KeybindAction::NextAgent => {
-                let agents = super::agent_sidebar::ordered_agent_pane_ids(
-                    snapshot,
-                    self.config.agent_panel_sort,
+                    &self.config,
+                    self.sidebar_collapsed,
                 );
                 if agents.is_empty() {
                     return None;
@@ -896,6 +890,7 @@ impl ClientShellState {
                     Some(pane_id.as_str()) == snapshot.focused_pane_id.as_deref()
                 });
                 let next = match (current, action) {
+                    (_, KeybindAction::FocusAgent(index)) => index,
                     (Some(current), KeybindAction::PreviousAgent) => {
                         (current + agents.len() - 1) % agents.len()
                     }
@@ -904,14 +899,27 @@ impl ClientShellState {
                     (None, KeybindAction::NextAgent) => 0,
                     _ => unreachable!("relative agent action"),
                 };
-                let pane_id = agents[next].clone();
-                if !self
-                    .hits
-                    .agents
-                    .iter()
-                    .any(|(_, visible_pane_id)| visible_pane_id == &pane_id)
-                {
-                    self.agent_scroll = next.min(self.hits.agent_max_scroll);
+                let pane_id = agents.get(next)?.clone();
+                if !self.sidebar_collapsed && self.hits.agent_body.height > 0 {
+                    let rows = super::agent_sidebar::agent_rows(snapshot, &self.config, None);
+                    if let Some(target) = rows.iter().position(|row| row.pane_id == pane_id) {
+                        let heights = rows
+                            .iter()
+                            .map(|row| row.height().min(u16::MAX as usize) as u16)
+                            .collect::<Vec<_>>();
+                        let gaps = super::agent_sidebar::agent_row_gaps(
+                            &rows,
+                            self.config.agents.row_gap,
+                            |row| row,
+                        );
+                        self.agent_scroll = super::scroll::list_scroll_start_to_reveal(
+                            &heights,
+                            &gaps,
+                            self.hits.agent_body.height,
+                            self.agent_scroll,
+                            target,
+                        );
+                    }
                 }
                 Some(Method::PaneFocus(PaneTarget { pane_id }))
             }

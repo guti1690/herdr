@@ -876,13 +876,26 @@ impl ClientShellState {
                 })
                 .is_some(),
             KeybindMatch::Action(KeybindAction::FocusAgent(index)) => {
-                super::aggregate_navigation::online_agent_targets(
-                    &self.endpoints,
-                    &self.active_endpoint_id,
-                    self.config.agent_panel_sort,
-                )
-                .get(*index)
-                .is_some()
+                if self.multi_endpoint_active() {
+                    super::endpoint_agents::online_agent_targets(
+                        &self.endpoints,
+                        &self.active_endpoint_id,
+                        &self.config,
+                        self.sidebar_collapsed,
+                    )
+                    .get(*index)
+                    .is_some()
+                } else {
+                    self.snapshot.as_deref().is_some_and(|snapshot| {
+                        super::agent_sidebar::navigation_agent_pane_ids(
+                            snapshot,
+                            &self.config,
+                            self.sidebar_collapsed,
+                        )
+                        .get(*index)
+                        .is_some()
+                    })
+                }
             }
             _ => true,
         }

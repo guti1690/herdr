@@ -40,6 +40,553 @@ fn agent(
     }
 }
 
+#[test]
+fn grouped_agent_wide_headers_preserve_graphemes_and_clip_to_cells() {
+    let mut projected = snapshot();
+    projected.workspaces[0].label = "作業🚀e\u{0301}".into();
+    projected.agents = vec![agent("agent", AgentStatus::Idle, 1)];
+    let config = ClientShellConfig::from_config(&Config::default());
+    let mut row = agent_sidebar::agent_row(&projected, "pane_1", &config, None).unwrap();
+    row.group(true, true, Some("機器👩‍💻"));
+    let area = Rect::new(0, 0, 24, 3);
+    let mut buffer = Buffer::empty(area);
+    agent_sidebar::render_agent_row(&mut buffer, Rect::new(2, 0, 19, 2), &row, &config);
+    for (x, symbol) in [
+        (3, "機"),
+        (5, "器"),
+        (7, "👩‍💻"),
+        (10, "·"),
+        (12, "作"),
+        (14, "業"),
+        (16, "🚀"),
+        (18, "e\u{0301}"),
+    ] {
+        assert_eq!(buffer[(x, 0)].symbol(), symbol, "cell {x}");
+    }
+    // Eleven cells cannot hold the next two-cell workspace character.
+    buffer = Buffer::empty(area);
+    buffer[(13, 0)].set_symbol("!");
+    agent_sidebar::render_agent_row(&mut buffer, Rect::new(2, 0, 11, 2), &row, &config);
+    assert_eq!(buffer[(12, 0)].symbol(), " ");
+    assert_eq!(buffer[(13, 0)].symbol(), "!");
+    assert_eq!(buffer[(7, 0)].symbol(), "👩‍💻");
+}
+
+#[test]
+fn agent_navigation_matches_grouped_order_and_preserves_flat_collapsed_order() {
+    use crate::config::AgentPanelSortConfig::{Priority, Spaces};
+    use crate::input::{KeybindAction, KeybindMatch};
+    let mut projected = snapshot();
+    let mut second = projected.workspaces[0].clone();
+    second.workspace_id = "ws_2".into();
+    projected.workspaces.push(second);
+    projected.agents = (1..=4)
+        .map(|index| {
+            let mut row = agent("populated", AgentStatus::Idle, 1);
+            row.pane_id = format!("pane_{index}");
+            row.workspace_id = match index {
+                2 => "ws_2",
+                3 => "orphan",
+                _ => "ws_1",
+            }
+            .into();
+            row
+        })
+        .collect();
+    projected.focused_pane_id = Some("pane_1".into());
+    for (sort, label, collapsed, expected) in [
+        (Spaces, None, false, vec!["pane_1", "pane_4", "pane_2"]),
+        (
+            Spaces,
+            None,
+            true,
+            vec!["pane_1", "pane_2", "pane_3", "pane_4"],
+        ),
+        (
+            Priority,
+            None,
+            false,
+            vec!["pane_1", "pane_2", "pane_3", "pane_4"],
+        ),
+        (
+            Spaces,
+            Some("view"),
+            false,
+            vec!["pane_2", "pane_1", "pane_4", "pane_3"],
+        ),
+    ] {
+        let mut view = projected.clone();
+        view.agent_view_label = label.map(str::to_owned);
+        view.agent_order = vec![
+            "pane_2".into(),
+            "pane_1".into(),
+            "pane_4".into(),
+            "pane_3".into(),
+        ];
+        let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+        state.config.agent_panel_sort = sort;
+        state.sidebar_collapsed = collapsed;
+        state.set_snapshot(Box::new(view));
+        assert_eq!(
+            agent_sidebar::navigation_agent_pane_ids(
+                state.snapshot.as_deref().unwrap(),
+                &state.config,
+                collapsed
+            ),
+            expected
+        );
+        for (index, pane) in expected.iter().enumerate() {
+            let binding = KeybindMatch::Action(KeybindAction::FocusAgent(index));
+            assert!(state.indexed_navigation_target_exists(&binding));
+            let mut outcome = ClientShellInput::default();
+            state.record_binding(binding, &mut outcome);
+            assert!(
+                matches!(outcome.actions.as_slice(), [ClientShellAction::Endpoint { request, .. }]
+                if matches!(&request.method, crate::api::schema::Method::PaneFocus(target) if target.pane_id == *pane))
+            );
+        }
+        assert!(
+            !state.indexed_navigation_target_exists(&KeybindMatch::Action(
+                KeybindAction::FocusAgent(expected.len())
+            ))
+        );
+    }
+
+    let profile = remote_profile();
+    let remote_id = ClientEndpointId::Ssh(profile.id.clone());
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_endpoint_catalog(&[profile]);
+    state.set_endpoint_status(&remote_id, ClientEndpointStatus::Online);
+    state.set_snapshot(Box::new(projected.clone()));
+    let mut remote = projected;
+    remote.boot_id = "remote-boot".into();
+    state.set_endpoint_snapshot(&remote_id, Box::new(remote));
+    for collapsed in [false, true] {
+        state.sidebar_collapsed = collapsed;
+        let expected = if collapsed {
+            vec!["pane_1", "pane_2", "pane_4"]
+        } else {
+            vec!["pane_1", "pane_4", "pane_2"]
+        };
+        let targets = endpoint_agents::online_agent_targets(
+            &state.endpoints,
+            &state.active_endpoint_id,
+            &state.config,
+            collapsed,
+        );
+        assert_eq!(
+            targets
+                .iter()
+                .map(|target| target.pane_id.as_str())
+                .collect::<Vec<_>>(),
+            expected
+                .iter()
+                .chain(&expected)
+                .copied()
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(targets[3].endpoint_id, remote_id);
+        for (index, pane) in expected.iter().enumerate() {
+            let mut outcome = ClientShellInput::default();
+            assert!(
+                state.handle_endpoint_navigation(KeybindAction::FocusAgent(index), &mut outcome)
+            );
+            assert!(
+                matches!(outcome.actions.as_slice(), [ClientShellAction::ActivateEndpoint {
+                    endpoint_id: ClientEndpointId::Local,
+                    target: Some(ClientEndpointFocusTarget::Pane(target)),
+                }] if target == *pane)
+            );
+        }
+        for (offset, pane) in expected.iter().enumerate() {
+            let mut outcome = ClientShellInput::default();
+            state.handle_endpoint_navigation(KeybindAction::FocusAgent(3 + offset), &mut outcome);
+            assert!(
+                matches!(outcome.actions.as_slice(), [ClientShellAction::ActivateEndpoint {
+                endpoint_id, target: Some(ClientEndpointFocusTarget::Pane(target)),
+            }] if endpoint_id == &remote_id && target == *pane)
+            );
+        }
+        assert!(!state
+            .indexed_navigation_target_exists(&KeybindMatch::Action(KeybindAction::FocusAgent(6))));
+        let mut outcome = ClientShellInput::default();
+        state.handle_endpoint_navigation(KeybindAction::NextAgent, &mut outcome);
+        assert!(
+            matches!(outcome.actions.as_slice(), [ClientShellAction::ActivateEndpoint {
+                endpoint_id: ClientEndpointId::Local,
+                target: Some(ClientEndpointFocusTarget::Pane(target)),
+            }] if target == expected[1])
+        );
+    }
+}
+
+#[test]
+fn grouped_agent_tree_headers_branches_hits_and_flat_modes() {
+    use crate::config::{AgentPanelSortConfig, AgentSidebarToken};
+    let mut local = snapshot();
+    let mut second = local.workspaces[0].clone();
+    second.workspace_id = "ws_2".into();
+    second.label = "second".into();
+    local.workspaces.push(second);
+    local.agents = (1..=3)
+        .map(|index| {
+            let mut agent = agent(&format!("agent {index}"), AgentStatus::Idle, index);
+            agent.pane_id = format!("pane_{index}");
+            if index == 3 {
+                agent.workspace_id = "ws_2".into();
+            }
+            agent
+        })
+        .collect();
+    // Interleaved snapshot rows must still form one group per workspace.
+    local.agents.swap(1, 2);
+    let mut config = ClientShellConfig::from_config(&Config::default());
+    config.agents.row_gap = 2;
+    let area = Rect::new(0, 0, 40, 20);
+    let mut buffer = Buffer::empty(area);
+    let mut hits = ShellHitMap::default();
+    agent_sidebar::render_agent_panel(&mut buffer, area, &local, &config, &mut 0, &mut hits);
+    assert_eq!(
+        hits.agents
+            .iter()
+            .map(|(r, _)| (r.y, r.height))
+            .collect::<Vec<_>>(),
+        [(4, 1), (5, 1), (9, 1)]
+    );
+    let line = |buffer: &Buffer, y| {
+        (0..area.width)
+            .map(|x| buffer[(x, y)].symbol())
+            .collect::<String>()
+    };
+    assert!(line(&buffer, 3).contains(&local.workspaces[0].label));
+    assert!(line(&buffer, 4).contains("├─"));
+    assert!(line(&buffer, 5).contains("└─"));
+    assert!(line(&buffer, 8).contains("second"));
+    assert!(!line(&buffer, 4).contains(&local.workspaces[0].label));
+    assert!(line(&buffer, 6).trim().is_empty());
+    assert!(line(&buffer, 7).trim().is_empty());
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(local.clone()));
+    state.hits = hits;
+    let mut outcome = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::FocusAgent(1)),
+        &mut outcome,
+    );
+    assert!(
+        matches!(outcome.actions.as_slice(), [ClientShellAction::Endpoint { request, .. }]
+        if matches!(&request.method, crate::api::schema::Method::PaneFocus(target) if target.pane_id == "pane_2"))
+    );
+    for y in [3, 6, 7, 8] {
+        let click = state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 1,
+            row: y,
+            modifiers: KeyModifiers::empty(),
+        })]);
+        assert!(click.actions.is_empty(), "headers/gaps are inert");
+    }
+
+    // Explicit multi-line layouts retain continuation branches, not duplicate group tokens.
+    config.agents.rows = vec![
+        vec![AgentSidebarToken::Workspace, AgentSidebarToken::Agent],
+        vec![AgentSidebarToken::StateText],
+    ];
+    buffer = Buffer::empty(area);
+    hits = ShellHitMap::default();
+    agent_sidebar::render_agent_panel(&mut buffer, area, &local, &config, &mut 0, &mut hits);
+    assert!(line(&buffer, 5).contains("│"));
+    assert!(!line(&buffer, 7).contains("│"));
+    assert_eq!(hits.agents[0].0.height, 2);
+
+    for (sort, label) in [
+        (AgentPanelSortConfig::Priority, None),
+        (AgentPanelSortConfig::Spaces, Some("custom")),
+    ] {
+        config.agent_panel_sort = sort;
+        local.agent_view_label = label.map(str::to_owned);
+        local.agent_order = vec!["pane_3".into(), "pane_1".into(), "pane_2".into()];
+        let rows = agent_sidebar::agent_rows(&local, &config, None);
+        assert!(rows
+            .iter()
+            .all(|row| row.header.is_none() && row.last_child.is_none()));
+        assert!(rows[0].rows[0]
+            .iter()
+            .any(|token| matches!(token.kind, crate::ui::ResolvedTokenKind::Workspace(_))));
+        buffer = Buffer::empty(area);
+        hits = ShellHitMap::default();
+        agent_sidebar::render_agent_panel(&mut buffer, area, &local, &config, &mut 0, &mut hits);
+        assert_eq!(
+            hits.agents.iter().map(|(r, _)| r.y).collect::<Vec<_>>(),
+            [3, 7, 11]
+        );
+        if label.is_some() {
+            assert_eq!(hits.agents[0].1, "pane_3");
+        }
+    }
+}
+
+#[test]
+fn grouped_agent_endpoint_and_local_keyboard_reveal() {
+    use crate::input::{KeybindAction, KeybindMatch};
+    let config = ClientShellConfig::from_config(&Config::default());
+    let mut local = snapshot();
+    local.agents = (1..=3)
+        .map(|index| {
+            let mut row = agent(&format!("local {index}"), AgentStatus::Idle, index);
+            row.pane_id = format!("pane_{index}");
+            row
+        })
+        .collect();
+    local.focused_pane_id = Some("pane_1".into());
+    let mut state = ClientShellState::new(config);
+    state.set_snapshot(Box::new(local.clone()));
+    let area = Rect::new(0, 0, 40, 5);
+    let mut buffer = Buffer::empty(area);
+    agent_sidebar::render_agent_panel(
+        &mut buffer,
+        area,
+        &local,
+        &state.config,
+        &mut state.agent_scroll,
+        &mut state.hits,
+    );
+    for action in [KeybindAction::FocusAgent(2), KeybindAction::PreviousAgent] {
+        state.agent_scroll = 0;
+        let mut outcome = ClientShellInput::default();
+        state.record_binding(KeybindMatch::Action(action), &mut outcome);
+        assert!(!outcome.actions.is_empty());
+        buffer = Buffer::empty(area);
+        state.hits = ShellHitMap::default();
+        agent_sidebar::render_agent_panel(
+            &mut buffer,
+            area,
+            &local,
+            &state.config,
+            &mut state.agent_scroll,
+            &mut state.hits,
+        );
+        assert!(state.hits.agents.iter().any(|(_, pane)| pane == "pane_3"));
+    }
+    let profile = remote_profile();
+    let remote_id = ClientEndpointId::Ssh(profile.id.clone());
+    state.set_endpoint_catalog(&[profile]);
+    state.set_endpoint_status(&remote_id, ClientEndpointStatus::Online);
+    let mut remote = snapshot();
+    remote.boot_id = "remote-boot".into();
+    remote.agents = vec![agent("remote", AgentStatus::Blocked, 1)];
+    remote.agent_view_label = Some("inactive custom".into());
+    remote.agent_order = vec!["pane_1".into()];
+    state.set_endpoint_snapshot(&remote_id, Box::new(remote));
+    let tall = Rect::new(0, 0, 40, 20);
+    buffer = Buffer::empty(tall);
+    state.hits = ShellHitMap::default();
+    state.agent_scroll = 0;
+    endpoint_agents::render_expanded(
+        &mut buffer,
+        tall,
+        None,
+        &state.endpoints,
+        &state.active_endpoint_id,
+        &state.config,
+        &mut state.agent_scroll,
+        &mut state.hits,
+    );
+    assert_eq!(
+        state
+            .hits
+            .endpoint_agents
+            .iter()
+            .map(|(r, _, _)| r.y)
+            .collect::<Vec<_>>(),
+        [4, 5, 6, 8]
+    );
+    let text = (0..tall.width)
+        .map(|x| buffer[(x, 7)].symbol())
+        .collect::<String>();
+    assert!(text.contains("Build"));
+    assert!(text.contains(&local.workspaces[0].label));
+    let click = state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 1,
+        row: 7,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    assert!(click.actions.is_empty());
+    // Collapsed rows keep the original machine-initial/status presentation.
+    let mut collapsed_hits = ShellHitMap::default();
+    let collapsed = Rect::new(0, 0, 3, 10);
+    let mut collapsed_buffer = Buffer::empty(collapsed);
+    endpoint_agents::render_collapsed(
+        &mut collapsed_buffer,
+        collapsed,
+        &state.endpoints,
+        &state.active_endpoint_id,
+        &state.config,
+        &mut collapsed_hits,
+    );
+    assert_eq!(collapsed_hits.endpoint_agents.len(), 4);
+    assert!(collapsed_hits
+        .endpoint_agents
+        .iter()
+        .all(|(rect, _, _)| rect.height == 1));
+    assert_eq!(collapsed_buffer[(0, 3)].symbol(), "B");
+
+    for height in [1, 2, 4] {
+        state.agent_scroll = 0;
+        state.reveal_endpoint_agent(&remote_id, "pane_1", height);
+        let short = Rect::new(0, 0, 40, height + 3);
+        buffer = Buffer::empty(short);
+        state.hits = ShellHitMap::default();
+        endpoint_agents::render_expanded(
+            &mut buffer,
+            short,
+            None,
+            &state.endpoints,
+            &state.active_endpoint_id,
+            &state.config,
+            &mut state.agent_scroll,
+            &mut state.hits,
+        );
+        assert!(state
+            .hits
+            .endpoint_agents
+            .iter()
+            .any(|(_, id, pane)| id == &remote_id && pane == "pane_1"));
+        let rect = state.hits.endpoint_agents.last().unwrap().0;
+        let click = state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: rect.x,
+            row: rect.y,
+            modifiers: KeyModifiers::empty(),
+        })]);
+        assert!(
+            matches!(click.actions.as_slice(), [ClientShellAction::ActivateEndpoint {
+            endpoint_id, target: Some(ClientEndpointFocusTarget::Pane(pane)),
+        }] if endpoint_id == &remote_id && pane == "pane_1")
+        );
+    }
+}
+
+#[test]
+fn grouped_agent_scroll_wheel_clamps_and_handles_empty_rows() {
+    let mut projected = snapshot();
+    projected.agents = (1..=5)
+        .map(|index| {
+            let mut row = agent("populated", AgentStatus::Idle, index);
+            row.pane_id = format!("pane_{index}");
+            row
+        })
+        .collect();
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(projected.clone()));
+    let area = Rect::new(0, 0, 24, 5);
+    let mut buffer = Buffer::empty(area);
+    agent_sidebar::render_agent_panel(
+        &mut buffer,
+        area,
+        &projected,
+        &state.config,
+        &mut state.agent_scroll,
+        &mut state.hits,
+    );
+    state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
+        kind: MouseEventKind::ScrollDown,
+        column: 1,
+        row: 3,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    assert!(state.agent_scroll > 0);
+    state.agent_scroll = usize::MAX;
+    state.hits = ShellHitMap::default();
+    buffer = Buffer::empty(area);
+    agent_sidebar::render_agent_panel(
+        &mut buffer,
+        area,
+        &projected,
+        &state.config,
+        &mut state.agent_scroll,
+        &mut state.hits,
+    );
+    assert_eq!(state.agent_scroll, 3);
+    assert_eq!(state.hits.agents.last().unwrap().1, "pane_5");
+    assert_eq!(
+        state.hits.agent_scroll_metrics.unwrap().offset_from_bottom,
+        0
+    );
+    projected.agents.clear();
+    state.hits = ShellHitMap::default();
+    agent_sidebar::render_agent_panel(
+        &mut buffer,
+        area,
+        &projected,
+        &state.config,
+        &mut state.agent_scroll,
+        &mut state.hits,
+    );
+    assert_eq!(state.agent_scroll, 0);
+    assert!(state.hits.agents.is_empty());
+}
+
+#[test]
+#[ignore = "manual fixed-geometry grouped agent tree scaling profile"]
+fn agent_tree_render_scale_profile() {
+    let area = Rect::new(0, 0, 32, 64);
+    for count in [1, 15] {
+        let mut snapshot = snapshot();
+        let workspace = snapshot.workspaces[0].clone();
+        snapshot.workspaces = (0..count)
+            .map(|index| {
+                let mut ws = workspace.clone();
+                ws.workspace_id = format!("ws_{index}");
+                ws
+            })
+            .collect();
+        snapshot.agents = (0..count)
+            .map(|index| {
+                let mut row = agent("populated", AgentStatus::Idle, index as u64);
+                row.pane_id = format!("pane_{index}");
+                row.workspace_id = format!("ws_{index}");
+                row
+            })
+            .collect();
+        for grouped in [false, true] {
+            let mut config = ClientShellConfig::from_config(&Config::default());
+            let mut view = snapshot.clone();
+            if !grouped {
+                view.agent_view_label = Some("flat".into());
+                view.agent_order = view.agents.iter().map(|a| a.pane_id.clone()).collect();
+            }
+            config.agents.row_gap = 0;
+            let mut samples = Vec::new();
+            let mut buffer = Buffer::empty(area);
+            let mut hits = ShellHitMap::default();
+            for _ in 0..9 {
+                let start = std::time::Instant::now();
+                for _ in 0..1000 {
+                    hits.agents.clear();
+                    agent_sidebar::render_agent_panel(
+                        &mut buffer,
+                        area,
+                        &view,
+                        &config,
+                        &mut 0,
+                        &mut hits,
+                    );
+                    std::hint::black_box(&buffer);
+                }
+                samples.push(start.elapsed().as_nanos() as f64 / 1000.0);
+            }
+            assert_eq!(hits.agents.len(), count);
+            samples.sort_by(f64::total_cmp);
+            eprintln!(
+                "agent tree grouped={grouped} agents={count} fixed=32x64 median_ns={:.0}",
+                samples[4]
+            );
+        }
+    }
+}
+
 fn current_workspace_view() -> crate::api::schema::AgentViewSetParams {
     use crate::api::schema::{
         AgentViewBuiltinField, AgentViewContext, AgentViewField, AgentViewFilter, AgentViewValue,
@@ -377,10 +924,11 @@ fn agent_navigation_reveal_is_cancelled_by_another_selection() {
 fn agent_navigation_keeps_scroll_when_target_is_visible() {
     let (mut state, _) = state_with_scrollable_agents();
     let (_, endpoint_id, pane_id) = state.hits.endpoint_agents[1].clone();
-    let targets = super::super::aggregate_navigation::online_agent_targets(
+    let targets = super::super::endpoint_agents::online_agent_targets(
         &state.endpoints,
         &state.active_endpoint_id,
-        state.config.agent_panel_sort,
+        &state.config,
+        state.sidebar_collapsed,
     );
     let index = targets
         .iter()
@@ -1146,8 +1694,10 @@ fn aggregate_agents_use_configured_rows_machine_token_and_status_colors() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("○ Local · local agent"), "frame: {text}");
-    assert!(text.contains("× Build · remote agent"), "frame: {text}");
+    assert!(text.contains("○ local agent"), "frame: {text}");
+    assert!(text.contains("Local ·"), "frame: {text}");
+    assert!(text.contains("× remote agent"), "frame: {text}");
+    assert!(text.contains("Build ·"), "frame: {text}");
     assert!(text.contains("grouped"), "frame: {text}");
     let toggle = state.hits.agent_sort_toggle;
     assert!(!toggle.is_empty());
@@ -1163,7 +1713,28 @@ fn aggregate_agents_use_configured_rows_machine_token_and_status_colors() {
     );
     assert!(click.actions.is_empty());
 
-    let buffer = frame
+    let flat = state
+        .compose(100, 28)
+        .expect("flat configured machine rows");
+    let flat_text = flat
+        .cells
+        .chunks(flat.width as usize)
+        .map(|row| {
+            row.iter()
+                .map(|cell| cell.symbol.as_str())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        flat_text.contains("○ Local · local agent"),
+        "frame: {flat_text}"
+    );
+    assert!(
+        flat_text.contains("× Build · remote agent"),
+        "frame: {flat_text}"
+    );
+    let buffer = flat
         .to_ratatui_buffer()
         .expect("aggregate frame should reconstruct");
     assert!(buffer
@@ -1357,8 +1928,8 @@ fn selected_default_view_ignores_inactive_endpoint_projection() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("Local · local agent"), "frame: {text}");
-    assert!(text.contains("Build · remote agent"), "frame: {text}");
+    assert!(text.contains("└─ local agent"), "frame: {text}");
+    assert!(text.contains("└─ remote agent"), "frame: {text}");
     assert!(text.contains("grouped"), "frame: {text}");
 }
 
@@ -2090,7 +2661,8 @@ fn disconnected_active_endpoint_freezes_surface_and_marks_cached_ui_stale() {
         Some(ClientEndpointStatus::Reconnecting)
     );
     assert!(text.contains("◐ reconnecting"), "frame: {text}");
-    assert!(text.contains("Build · remote agent"), "frame: {text}");
+    assert!(text.contains("Build · remote-workspace"), "frame: {text}");
+    assert!(text.contains("└─ × remote agent"), "frame: {text}");
     assert!(
         text.contains("LIVE"),
         "frozen surface should remain: {text}"

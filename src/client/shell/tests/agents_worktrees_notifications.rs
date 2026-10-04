@@ -819,13 +819,25 @@ fn muted_agent_sidebar_rows_do_not_stack_terminal_faint() {
     let row = state.hits.agents.first().expect("agent row hit").0;
     let buffer = frame.to_ratatui_buffer().expect("agent sidebar buffer");
 
-    for (label, needle) in [("tab", "second"), ("agent", "reviewer"), ("separator", "·")] {
+    for (label, needle) in [
+        ("tab", "second"),
+        ("agent", "reviewer"),
+        ("tree branch", "└"),
+    ] {
         let (x, y) = cell_symbol_position(&frame, row, needle);
         let cell = buffer.cell((x, y)).expect("muted sidebar cell");
         assert!(
             !cell.modifier.contains(Modifier::DIM),
             "{label} cell at ({x},{y}) should not stack terminal faint: {cell:?}"
         );
+    }
+    state.config.agent_panel_sort = crate::config::AgentPanelSortConfig::Priority;
+    let frame = state.compose(106, 30).expect("flat agent sidebar frame");
+    let row = state.hits.agents.first().expect("flat row hit").0;
+    let buffer = frame.to_ratatui_buffer().expect("flat sidebar buffer");
+    for needle in ["second", "reviewer", "·"] {
+        let (x, y) = cell_symbol_position(&frame, row, needle);
+        assert!(!buffer[(x, y)].modifier.contains(Modifier::DIM));
     }
 }
 

@@ -397,7 +397,7 @@ Space 行支持以下内置 token：
 - `git_status` — 非零时显示 Git ahead 和 behind 数量。
 - `$name` — 名为 `name` 的自定义工作区元数据。
 
-token 会按配置顺序渲染。Herdr 通常使用 ` · ` 分隔相邻值，并在 `state_icon` 后使用一个空格。缺失值及其分隔符会消失；当一行中的所有 token 都没有值时，该行会消失。已有的自定义行不会改变；如果希望在自定义的多机器布局中显示机器标识，请显式添加 `machine`。每个布局最多可包含 16 行，每行最多可包含 16 个 token。
+token 会按配置顺序渲染。Herdr 通常使用 ` · ` 分隔相邻值，并在 `state_icon` 后使用一个空格。缺失值及其分隔符会消失；当一行中的所有 token 都没有值时，该行会消失。优先级排序和通过 `agent.view.set` 设置的 Agent 视图仍使用平铺的 Agent 行；如果希望在平铺的自定义多机器布局中显示机器标识，请显式添加 `machine`。每个布局最多可包含 16 行，每行最多可包含 16 个 token。
 
 也可以用内联样式表定义 token：
 
@@ -430,7 +430,9 @@ rows = [
 
 规则适用于 Agent 行、`rows_by_agent` 覆盖和 Space 行中的文本值内置 token 及自定义 `$name` token。上例中，`$load` 报告 `"90"` 时显示红色粗体，`"60"` 时显示黄色，`"90%"` 时保持白色。未报告的 token 仍然不显示。`state_icon` 和复合 token `git_status` 仅接受固定样式，不支持规则。未知条件或格式错误的规则会在加载配置时被拒绝；不支持正则表达式、模糊匹配或脚本。
 
-`row_gap` 分别控制 Agent 和 Space 面板中条目之间的空白终端行数。默认值为 `0`，会紧密排列条目；设为 `1` 可恢复之前的间距。它不会在 `rows` 声明的内容行之间添加间距。连续缩进的 worktree 子项仍会作为一个 Space 组紧密排列。
+`row_gap` 分别控制 Agent 和 Space 面板中条目之间的空白终端行数。默认值为 `0`，会紧密排列条目；设为 `1` 可恢复之前的间距。它不会在 `rows` 声明的内容行之间添加间距。在 Agent 面板的 **grouped** 模式下，它只在工作区分组之间添加空白行，不在同一工作区的 Agent 之间添加。连续缩进的 worktree 子项仍会作为一个 Space 组紧密排列。
+
+没有通过 `agent.view.set` 设置 Agent 视图且 `ui.agent_panel_sort = "spaces"`（侧边栏显示为 **grouped**）时，展开的 Agent 面板会像 Space/worktree 树一样显示工作区 → Agent 树。每个工作区的标题不可点击、不可折叠；缩进的 Agent 子项使用 `├─`/`└─` 分支，多行时用 `│` 延续。连接多台机器时，标题也包含机器标签，不同机器上的工作区分别成组。标题已提供机器和工作区信息，因此分组子项即使显式配置了 `machine` 和 `workspace` token，也会省略它们。使用默认 Agent 布局时，仅显示状态的首行会并入 Agent 名称行；包含 `tab` 的首行则保持独立，子项仍为多行。优先级排序和通过 `agent.view.set` 设置的 Agent 视图仍保持平铺的 Agent 行；折叠的侧边栏不变。
 
 在 `rows_by_agent` 下为已知智能体覆盖完整的 Agent 布局：
 

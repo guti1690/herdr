@@ -689,6 +689,15 @@ pub(in crate::client::shell) fn workspace_rows(
     )
 }
 
+pub(in crate::client::shell) fn tree_prefix(row_index: usize, last_child: bool) -> &'static str {
+    match (row_index == 0, last_child) {
+        (true, true) => "   └─ ",
+        (true, false) => "   ├─ ",
+        (false, true) => "        ",
+        (false, false) => "   │    ",
+    }
+}
+
 pub(in crate::client::shell) fn render_workspace_rows(
     buffer: &mut Buffer,
     area: Rect,
@@ -709,17 +718,7 @@ pub(in crate::client::shell) fn render_workspace_rows(
         }
         let mut x = area.x;
         if entry.indented {
-            let prefix = if row_index == 0 {
-                if entry.last_child {
-                    "   └─ "
-                } else {
-                    "   ├─ "
-                }
-            } else if entry.last_child {
-                "        "
-            } else {
-                "   │    "
-            };
+            let prefix = tree_prefix(row_index, entry.last_child);
             x = put_segment(
                 buffer,
                 x,

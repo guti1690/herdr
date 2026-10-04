@@ -1038,7 +1038,7 @@
           "key": "ui.agent_panel_sort",
           "type": "enum",
           "default": "\"spaces\"",
-          "description": "Agent sidebar ordering. Saved values are \"spaces\" or \"priority\"; \"workspaces\" is accepted as an alias for \"spaces\".",
+          "description": "Agent sidebar ordering. \"spaces\" (grouped) shows an expanded workspace-to-agent tree with plain headers and indented children when no Agent view is installed through agent.view.set; grouped children omit configured machine and workspace tokens. The default status-only line merges into the agent name line, while a line with tab stays separate. \"priority\" and Agent views installed through agent.view.set remain flat. Saved values are \"spaces\" or \"priority\"; \"workspaces\" is accepted as an alias for \"spaces\".",
           "values": [
             "spaces",
             "priority"
@@ -1058,7 +1058,7 @@
           "key": "ui.sidebar.agents.row_gap",
           "type": "integer",
           "default": "0",
-          "description": "Blank terminal rows between expanded Agent sidebar entries. Set to 1 to restore the previous spacing."
+          "description": "Blank terminal rows between expanded Agent sidebar entries. In grouped Spaces mode, applies only between workspace groups, not between agents in the same workspace. Set to 1 for spacing between groups or between rows in flat views."
         },
         {
           "key": "ui.sidebar.agents.rows",
