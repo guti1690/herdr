@@ -27,6 +27,10 @@ pub fn run_server() -> io::Result<()> {
     }
 
     let loaded_config = config::Config::load();
+    #[cfg(windows)]
+    if loaded_config.config.server.allow_unelevated_clients {
+        crate::platform::allow_unelevated_clients();
+    }
     let (api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
     let event_hub = api::EventHub::default();
     let should_quit = Arc::new(AtomicBool::new(false));
@@ -53,13 +57,13 @@ pub fn run_server() -> io::Result<()> {
 
     let result = rt.block_on(async {
         // Create the App (with AppState, event channels, etc.).
-        let mut app = app::App::new(
+        let mut app = app::App::try_new(
             &loaded_config.config,
             app::AppPolicy::PRODUCTION,
             config::config_diagnostic_summary(&loaded_config.diagnostics),
             api_rx,
             event_hub,
-        );
+        )?;
         seed_startup_workspace_if_empty(&mut app);
 
         // Create the headless server.
