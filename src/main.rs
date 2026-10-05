@@ -327,7 +327,7 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Set to "" to leave the outer terminal title alone.
 # window_title = "{hostname}: {workspace}"
 
-# Agent panel ordering: "spaces" (grouped by space) or "priority" (attention queue).
+# Agent panel ordering: "spaces" (space order) or "priority" (attention queue).
 # "workspaces" is accepted as an alias for "spaces".
 # agent_panel_sort = "spaces"
 
@@ -345,6 +345,9 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # A token occurrence may be styled with { token = "workspace", fg = "#89b4fa", bold = true, dim = false }.
 # Omitted style fields preserve the contextual default.
 # [ui.sidebar.agents]
+# Group agents by space when using spaces sort with no agent view (flat by default).
+# Toggle in Settings > tree; changes are saved immediately.
+# tree = false
 # Blank rows between agent entries. Set to 1 to restore the previous spacing.
 # row_gap = 0
 # rows = [["state_icon", "machine", "workspace", "tab"], ["agent"]]

@@ -387,6 +387,7 @@ pub(super) enum ClientSettingsSection {
     Indicators,
     Sound,
     Toast,
+    AgentTree,
     Integrations,
 }
 
@@ -396,6 +397,7 @@ impl ClientSettingsSection {
         Self::Indicators,
         Self::Sound,
         Self::Toast,
+        Self::AgentTree,
         Self::Integrations,
     ];
 
@@ -405,6 +407,7 @@ impl ClientSettingsSection {
             Self::Indicators => "indicators",
             Self::Sound => "sound",
             Self::Toast => "toasts",
+            Self::AgentTree => "tree",
             Self::Integrations => "integrations",
         }
     }

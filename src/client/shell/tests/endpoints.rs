@@ -41,6 +41,60 @@ fn agent(
 }
 
 #[test]
+fn agent_tree_flat_default_and_focused_child_styles() {
+    let mut projected = snapshot();
+    projected.agents = vec![agent("bright agent", AgentStatus::Idle, 1)];
+    let mut config = ClientShellConfig::from_config(&Config::default());
+    let rows = agent_sidebar::agent_rows(&projected, &config, None);
+    assert!(rows
+        .iter()
+        .all(|row| row.header.is_none() && row.last_child.is_none()));
+    assert!(!agent_sidebar::agent_groups_enabled(&config, None));
+    assert_eq!(
+        agent_sidebar::navigation_agent_pane_ids(&projected, &config, false),
+        vec!["pane_1"]
+    );
+
+    config.agents.tree = true;
+    config.agents.rows = vec![vec![
+        crate::config::AgentSidebarToken::Tab,
+        crate::config::AgentSidebarToken::Agent,
+    ]];
+    projected.tabs[0].custom_label = true;
+    projected.tabs[0].label = "bright tab".into();
+    for focused in [false, true] {
+        projected.agents[0].focused = focused;
+        let rows = agent_sidebar::agent_rows(&projected, &config, None);
+        let area = Rect::new(0, 0, 40, 2);
+        let mut buffer = Buffer::empty(area);
+        agent_sidebar::render_agent_row(&mut buffer, area, &rows[0], &config);
+        for x in [6, 21] {
+            let cell = &buffer[(x, 1)];
+            assert_eq!(
+                cell.fg,
+                if focused {
+                    config.palette.text
+                } else {
+                    config.palette.overlay0
+                }
+            );
+            assert_eq!(cell.modifier.contains(Modifier::BOLD), focused);
+            assert!(!cell.modifier.contains(Modifier::DIM));
+        }
+        assert_eq!(buffer[(3, 1)].fg, config.palette.overlay0);
+        assert!(!buffer[(3, 1)].modifier.contains(Modifier::BOLD));
+        assert!(!buffer[(3, 1)].modifier.contains(Modifier::DIM));
+        if focused {
+            assert!((0..40).all(|x| buffer[(x, 1)].bg == config.palette.active_row_bg));
+        }
+    }
+    config.agent_panel_sort = crate::config::AgentPanelSortConfig::Priority;
+    assert!(!agent_sidebar::agent_groups_enabled(&config, None));
+    config.agent_panel_sort = crate::config::AgentPanelSortConfig::Spaces;
+    assert!(!agent_sidebar::agent_groups_enabled(&config, Some("view")));
+}
+
+#[test]
 fn grouped_agent_wide_headers_preserve_graphemes_and_clip_to_cells() {
     let mut projected = snapshot();
     projected.workspaces[0].label = "作業🚀e\u{0301}".into();
@@ -94,21 +148,37 @@ fn agent_navigation_matches_grouped_order_and_preserves_flat_collapsed_order() {
         })
         .collect();
     projected.focused_pane_id = Some("pane_1".into());
-    for (sort, label, collapsed, expected) in [
-        (Spaces, None, false, vec!["pane_1", "pane_4", "pane_2"]),
+    for (tree, sort, label, collapsed, expected) in [
         (
+            false,
+            Spaces,
+            None,
+            false,
+            vec!["pane_1", "pane_2", "pane_3", "pane_4"],
+        ),
+        (
+            true,
+            Spaces,
+            None,
+            false,
+            vec!["pane_1", "pane_4", "pane_2"],
+        ),
+        (
+            true,
             Spaces,
             None,
             true,
             vec!["pane_1", "pane_2", "pane_3", "pane_4"],
         ),
         (
+            true,
             Priority,
             None,
             false,
             vec!["pane_1", "pane_2", "pane_3", "pane_4"],
         ),
         (
+            true,
             Spaces,
             Some("view"),
             false,
@@ -124,6 +194,7 @@ fn agent_navigation_matches_grouped_order_and_preserves_flat_collapsed_order() {
             "pane_3".into(),
         ];
         let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+        state.config.agents.tree = tree;
         state.config.agent_panel_sort = sort;
         state.sidebar_collapsed = collapsed;
         state.set_snapshot(Box::new(view));
@@ -155,6 +226,7 @@ fn agent_navigation_matches_grouped_order_and_preserves_flat_collapsed_order() {
     let profile = remote_profile();
     let remote_id = ClientEndpointId::Ssh(profile.id.clone());
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.config.agents.tree = true;
     state.set_endpoint_catalog(&[profile]);
     state.set_endpoint_status(&remote_id, ClientEndpointStatus::Online);
     state.set_snapshot(Box::new(projected.clone()));
@@ -241,6 +313,7 @@ fn grouped_agent_tree_headers_branches_hits_and_flat_modes() {
     // Interleaved snapshot rows must still form one group per workspace.
     local.agents.swap(1, 2);
     let mut config = ClientShellConfig::from_config(&Config::default());
+    config.agents.tree = true;
     config.agents.row_gap = 2;
     let area = Rect::new(0, 0, 40, 20);
     let mut buffer = Buffer::empty(area);
@@ -266,6 +339,7 @@ fn grouped_agent_tree_headers_branches_hits_and_flat_modes() {
     assert!(line(&buffer, 6).trim().is_empty());
     assert!(line(&buffer, 7).trim().is_empty());
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.config.agents.tree = true;
     state.set_snapshot(Box::new(local.clone()));
     state.hits = hits;
     let mut outcome = ClientShellInput::default();
@@ -299,10 +373,12 @@ fn grouped_agent_tree_headers_branches_hits_and_flat_modes() {
     assert!(!line(&buffer, 7).contains("│"));
     assert_eq!(hits.agents[0].0.height, 2);
 
-    for (sort, label) in [
-        (AgentPanelSortConfig::Priority, None),
-        (AgentPanelSortConfig::Spaces, Some("custom")),
+    for (tree, sort, label) in [
+        (false, AgentPanelSortConfig::Spaces, None),
+        (true, AgentPanelSortConfig::Priority, None),
+        (true, AgentPanelSortConfig::Spaces, Some("custom")),
     ] {
+        config.agents.tree = tree;
         config.agent_panel_sort = sort;
         local.agent_view_label = label.map(str::to_owned);
         local.agent_order = vec!["pane_3".into(), "pane_1".into(), "pane_2".into()];
@@ -329,7 +405,8 @@ fn grouped_agent_tree_headers_branches_hits_and_flat_modes() {
 #[test]
 fn grouped_agent_endpoint_and_local_keyboard_reveal() {
     use crate::input::{KeybindAction, KeybindMatch};
-    let config = ClientShellConfig::from_config(&Config::default());
+    let mut config = ClientShellConfig::from_config(&Config::default());
+    config.agents.tree = true;
     let mut local = snapshot();
     local.agents = (1..=3)
         .map(|index| {
@@ -479,6 +556,7 @@ fn grouped_agent_scroll_wheel_clamps_and_handles_empty_rows() {
         })
         .collect();
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.config.agents.tree = true;
     state.set_snapshot(Box::new(projected.clone()));
     let area = Rect::new(0, 0, 24, 5);
     let mut buffer = Buffer::empty(area);
@@ -552,6 +630,7 @@ fn agent_tree_render_scale_profile() {
             .collect();
         for grouped in [false, true] {
             let mut config = ClientShellConfig::from_config(&Config::default());
+            config.agents.tree = grouped;
             let mut view = snapshot.clone();
             if !grouped {
                 view.agent_view_label = Some("flat".into());
@@ -1662,6 +1741,7 @@ fn aggregate_agents_use_configured_rows_machine_token_and_status_colors() {
     use crate::config::{AgentSidebarToken, StatusIndicatorStyle};
 
     let mut config = Config::default();
+    config.ui.sidebar.agents.tree = true;
     config.ui.status_indicators = StatusIndicatorStyle::Symbols;
     config.ui.sidebar.agents.rows = vec![vec![
         AgentSidebarToken::StateIcon,
@@ -1885,6 +1965,7 @@ fn selected_default_view_ignores_inactive_endpoint_projection() {
     use crate::config::AgentSidebarToken;
 
     let mut config = Config::default();
+    config.ui.sidebar.agents.tree = true;
     config.ui.sidebar.agents.rows =
         vec![vec![AgentSidebarToken::Machine, AgentSidebarToken::Agent]];
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
@@ -2623,6 +2704,7 @@ fn disconnected_active_endpoint_freezes_surface_and_marks_cached_ui_stale() {
     use crate::config::{AgentSidebarToken, StatusIndicatorStyle};
 
     let (mut state, endpoint_id) = state_with_remote();
+    state.config.agents.tree = true;
     state.config.status_indicators = StatusIndicatorStyle::Symbols;
     state.config.agents.rows = vec![vec![
         AgentSidebarToken::StateIcon,

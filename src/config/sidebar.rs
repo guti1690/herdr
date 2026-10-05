@@ -422,6 +422,7 @@ where
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct AgentsSidebarConfig {
+    pub tree: bool,
     #[serde(deserialize_with = "deserialize_sidebar_rows")]
     pub rows: AgentSidebarRows,
     #[serde(default, deserialize_with = "deserialize_rows_by_agent")]
@@ -449,6 +450,7 @@ impl Default for AgentsSidebarConfig {
                 ],
                 vec![AgentSidebarToken::Agent],
             ],
+            tree: false,
             rows_by_agent: BTreeMap::new(),
             row_gap: DEFAULT_SIDEBAR_ROW_GAP,
         }
@@ -511,6 +513,20 @@ mod tests {
             ]
         );
         assert_eq!(config.spaces.row_gap, 0);
+    }
+
+    #[test]
+    fn agent_tree_is_opt_in_and_boolean() {
+        assert!(!SidebarConfig::default().agents.tree);
+        for tree in [false, true] {
+            let config: crate::config::Config =
+                toml::from_str(&format!("[ui.sidebar.agents]\ntree = {tree}\n")).unwrap();
+            assert_eq!(config.ui.sidebar.agents.tree, tree);
+        }
+        assert!(
+            toml::from_str::<crate::config::Config>("[ui.sidebar.agents]\ntree = \"true\"\n")
+                .is_err()
+        );
     }
 
     #[test]

@@ -1038,7 +1038,7 @@
           "key": "ui.agent_panel_sort",
           "type": "enum",
           "default": "\"spaces\"",
-          "description": "Agent sidebar ordering. \"spaces\" (grouped) shows an expanded workspace-to-agent tree with plain headers and indented children when no Agent view is installed through agent.view.set; grouped children omit configured machine and workspace tokens. The default status-only line merges into the agent name line, while a line with tab stays separate. \"priority\" and Agent views installed through agent.view.set remain flat. Saved values are \"spaces\" or \"priority\"; \"workspaces\" is accepted as an alias for \"spaces\".",
+          "description": "Agent sidebar ordering. \"spaces\" follows space order and is flat by default; with ui.sidebar.agents.tree = true and no Agent view installed through agent.view.set, it groups agents under workspace headers. \"priority\" and Agent views remain flat. Saved values are \"spaces\" or \"priority\"; \"workspaces\" is accepted as an alias for \"spaces\".",
           "values": [
             "spaces",
             "priority"
@@ -1055,10 +1055,16 @@
           ]
         },
         {
+          "key": "ui.sidebar.agents.tree",
+          "type": "boolean",
+          "default": "false",
+          "description": "Opt into workspace-to-agent grouping in the expanded Agent sidebar only when sorting by spaces and no Agent view is installed through agent.view.set. Toggle in Settings > tree (agent tree, on/off); changes apply immediately and are saved across restarts."
+        },
+        {
           "key": "ui.sidebar.agents.row_gap",
           "type": "integer",
           "default": "0",
-          "description": "Blank terminal rows between expanded Agent sidebar entries. In grouped Spaces mode, applies only between workspace groups, not between agents in the same workspace. Set to 1 for spacing between groups or between rows in flat views."
+          "description": "Blank terminal rows between expanded Agent sidebar entries. Only while grouping is active (tree = true, spaces sort, and no Agent view), applies between workspace groups rather than agents in the same workspace. Otherwise the panel is flat and the gap applies between agents."
         },
         {
           "key": "ui.sidebar.agents.rows",

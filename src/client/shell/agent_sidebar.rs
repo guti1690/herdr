@@ -203,7 +203,8 @@ pub(super) fn render_agent_panel_header(
             .add_modifier(Modifier::BOLD),
     );
     let sort_label = agent_view_label.unwrap_or(match config.agent_panel_sort {
-        crate::config::AgentPanelSortConfig::Spaces => "grouped",
+        crate::config::AgentPanelSortConfig::Spaces if config.agents.tree => "grouped",
+        crate::config::AgentPanelSortConfig::Spaces => "spaces",
         crate::config::AgentPanelSortConfig::Priority => "priority",
     });
     let sort_width = display_width(sort_label).min(area.width as usize) as u16;
@@ -239,7 +240,8 @@ pub(super) fn agent_groups_enabled(
     config: &ClientShellConfig,
     agent_view_label: Option<&str>,
 ) -> bool {
-    config.agent_panel_sort == crate::config::AgentPanelSortConfig::Spaces
+    config.agents.tree
+        && config.agent_panel_sort == crate::config::AgentPanelSortConfig::Spaces
         && agent_view_label.is_none()
 }
 
@@ -466,6 +468,11 @@ pub(super) fn render_agent_row(
     };
     let status_style = Style::default().fg(status_color(row.status, palette));
     let secondary = Style::default().fg(palette.overlay0);
+    let child_secondary = if row.focused && row.last_child.is_some() {
+        name_style
+    } else {
+        secondary
+    };
     let icon = (
         status_icon(row.status, config.status_indicators),
         Style::default().fg(status_color(row.status, palette)),
@@ -490,7 +497,7 @@ pub(super) fn render_agent_row(
             icon,
             status_style,
             name_style,
-            secondary,
+            child_secondary,
             secondary,
             palette,
             rect.width.saturating_sub(indent as u16) as usize,

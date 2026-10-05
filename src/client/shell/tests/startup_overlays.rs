@@ -1152,6 +1152,191 @@ fn current_release_notes_use_whats_new_without_attention_badge() {
 }
 
 #[test]
+fn client_settings_agent_tree_round_trip_is_immediate_and_persistent() {
+    let _guard = crate::config::test_config_env_lock().lock().unwrap();
+    struct ScratchConfig {
+        previous: Option<std::ffi::OsString>,
+        dir: std::path::PathBuf,
+    }
+    impl Drop for ScratchConfig {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, value),
+                None => std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR),
+            }
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+    let scratch = ScratchConfig {
+        previous: std::env::var_os(crate::config::CONFIG_PATH_ENV_VAR),
+        dir: std::env::temp_dir().join(format!(
+            "herdr-settings-agent-tree-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )),
+    };
+    std::fs::create_dir(&scratch.dir).unwrap();
+    let path = scratch.dir.join("config.toml");
+    std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    assert!(!state.config.agents.tree);
+    state.open_settings_overlay();
+    for _ in 0..4 {
+        assert!(state.handle_input_bytes(b"\t").actions.is_empty());
+    }
+    assert!(matches!(
+        state.overlay,
+        Some(ClientShellOverlay::Settings(ClientSettingsOverlay {
+            section: ClientSettingsSection::AgentTree,
+            selected: 1,
+            ..
+        }))
+    ));
+    let mut updated = snapshot();
+    updated.integration_updates_available = true;
+    state.set_snapshot(Box::new(updated));
+    state.compose(80, 30).unwrap();
+    assert_eq!(
+        state.hits.settings_tabs.len(),
+        ClientSettingsSection::ALL.len()
+    );
+    assert!(!state.hits.settings_tabs.last().unwrap().0.is_empty());
+    let on = state.hits.settings_choices[0].0;
+    let applied =
+        state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: on.x,
+            row: on.y,
+            modifiers: KeyModifiers::empty(),
+        })]);
+    assert!(applied.repaint);
+    assert!(state.config.agents.tree);
+    assert!(
+        matches!(applied.actions.as_slice(), [ClientShellAction::Endpoint { request, .. }]
+        if matches!(request.method, crate::api::schema::Method::ServerReloadConfig(_)))
+    );
+    state.handle_input_bytes(b"\x1b");
+    assert!(state.config.agents.tree);
+    let restarted = ClientShellState::new(ClientShellConfig::from_config(&Config::load().config));
+    assert!(restarted.config.agents.tree);
+    state.open_settings_overlay();
+    let mut outcome = ClientShellInput::default();
+    state.select_settings_section(ClientSettingsSection::AgentTree, &mut outcome);
+    assert!(matches!(
+        state.overlay,
+        Some(ClientShellOverlay::Settings(ClientSettingsOverlay {
+            selected: 0,
+            ..
+        }))
+    ));
+    state.handle_input_bytes(b"j");
+    state.handle_input_bytes(b"\r");
+    assert!(!state.config.agents.tree);
+    assert!(!Config::load().config.ui.sidebar.agents.tree);
+    // A file edit and client reload use the same option as Settings.
+    std::fs::write(&path, "[ui.sidebar.agents]\ntree = true\n").unwrap();
+    state.reload_client_config();
+    assert!(state.config.agents.tree);
+    std::fs::write(&path, "[ui.sidebar]\nagents = { tree = true }\n").unwrap();
+    let original = std::fs::read_to_string(&path).unwrap();
+    state.apply_settings_choice(&mut outcome);
+    assert!(state.config.agents.tree);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+}
+
+#[test]
+fn client_settings_narrow_tabs_keep_badged_integrations_mouse_and_keyboard_accessible() {
+    for width in [60, 64, 68, 72, 80] {
+        let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+        let mut projected = snapshot();
+        projected.integration_updates_available = true;
+        state.set_snapshot(Box::new(projected));
+        state.set_pane_surface(surface());
+        state.open_settings_overlay();
+        let frame = state.compose(width, 30).expect("narrow settings");
+        assert_eq!(
+            state.hits.settings_tabs.len(),
+            ClientSettingsSection::ALL.len(),
+            "width {width}"
+        );
+        assert!(
+            state
+                .hits
+                .settings_tabs
+                .iter()
+                .all(|(rect, _)| !rect.is_empty()),
+            "width {width}"
+        );
+        let (integrations, section) = *state.hits.settings_tabs.last().unwrap();
+        assert_eq!(section, ClientSettingsSection::Integrations);
+        assert!(
+            integrations.width > 3,
+            "badge and label must be clickable at width {width}"
+        );
+        let buffer = frame.to_ratatui_buffer().unwrap();
+        assert_eq!(buffer[(integrations.x + 1, integrations.y)].symbol(), "●");
+        let tree = state
+            .hits
+            .settings_tabs
+            .iter()
+            .find(|(_, section)| *section == ClientSettingsSection::AgentTree)
+            .unwrap()
+            .0;
+        state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: tree.x + 1,
+            row: tree.y,
+            modifiers: KeyModifiers::empty(),
+        })]);
+        let frame = state.compose(width, 30).unwrap();
+        let text = frame
+            .cells
+            .iter()
+            .map(|cell| cell.symbol.as_str())
+            .collect::<String>();
+        assert!(
+            text.contains("agent tree"),
+            "full section title at width {width}"
+        );
+        let accessed = state.handle_input_bytes(b"\t");
+        assert!(
+            matches!(accessed.actions.as_slice(), [ClientShellAction::Endpoint { request, .. }]
+            if matches!(request.method, crate::api::schema::Method::IntegrationList(_)))
+        );
+        assert!(matches!(
+            state.overlay,
+            Some(ClientShellOverlay::Settings(ClientSettingsOverlay {
+                section: ClientSettingsSection::Integrations,
+                ..
+            }))
+        ));
+        state.handle_input_bytes(b"h");
+        state.compose(width, 30).unwrap();
+        state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: integrations.x + 3,
+            row: integrations.y,
+            modifiers: KeyModifiers::empty(),
+        })]);
+        assert!(
+            matches!(
+                state.overlay,
+                Some(ClientShellOverlay::Settings(ClientSettingsOverlay {
+                    section: ClientSettingsSection::Integrations,
+                    ..
+                }))
+            ),
+            "Integrations mouse target at width {width}"
+        );
+    }
+}
+
+#[test]
 fn client_settings_preview_restore_and_endpoint_integrations_are_owned_by_overlay() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(snapshot()));
@@ -1196,7 +1381,7 @@ fn client_settings_preview_restore_and_endpoint_integrations_are_owned_by_overla
 
     state.open_settings_overlay();
     state.compose(106, 30).expect("settings overlay");
-    for _ in 0..3 {
+    for _ in 0..4 {
         let next = state.handle_input_bytes(b"\t");
         assert!(next.actions.is_empty());
     }
